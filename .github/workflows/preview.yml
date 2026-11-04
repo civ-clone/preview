@@ -1,0 +1,77 @@
+# Builds a web-renderer ref and publishes it to GitHub Pages, served at
+# https://civ.one/preview/ under the org site's custom domain. The same build
+# steps as web-renderer's deploy.yml, without the tests (each PR's CI runs those)
+# or the release-notes step.
+
+name: Deploy a preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: web-renderer branch, tag or commit to preview
+        required: true
+        default: main
+
+concurrency:
+  group: preview
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: civ-clone/web-renderer
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.5.2
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: npm run build
+
+      # As deploy.yml does: the build on the stylesheet's and script's URLs, so a
+      # cached copy from the last preview never runs with this one's files.
+      - name: Assemble the site
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          VERSION="$(node -p "encodeURIComponent(require('./build.json').version)")"
+          mkdir -p _site
+          cp -R dist _site/dist
+          sed -e "s#dist/app\.css#dist/app.css?v=${VERSION}#" \
+            -e "s#dist/frontend\.js#dist/frontend.js?v=${VERSION}#" \
+            index.html > _site/index.html
+          echo "Preview of ${REF} at $(git rev-parse --short HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
